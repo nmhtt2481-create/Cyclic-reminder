@@ -68,6 +68,14 @@ find bin -name '*.apk'
 adb install -r bin/*.apk
 ```
 
+В Windows сборку можно запустить через Docker одной командой из PowerShell (нужен Docker Desktop и образ `kivy/buildozer`):
+
+```powershell
+.\build.ps1
+```
+
+Скрипт `build.ps1` использует тома `buildozer_global` (Android SDK/NDK) и `cyclic_build` (кэш проекта), поэтому повторные сборки идут быстро.
+
 Для повторной сборки после изменения исходников используйте `buildozer android debug`. Для полной очистки промежуточных файлов:
 
 ```bash
@@ -117,6 +125,7 @@ Cyclic reminder/
 ├── settings.py         # загрузка и сохранение настроек
 ├── notifier.py         # звук и Android-уведомления
 ├── buildozer.spec      # конфигурация Android-сборки
+├── build.ps1           # сборка APK через Docker (Windows)
 └── README.md
 ```
 
