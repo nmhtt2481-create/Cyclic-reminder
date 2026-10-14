@@ -154,6 +154,17 @@ class ReminderApp(App):
             self.scheduler.pause()
 
     def on_pause(self):
+        # Пока приложение свёрнуто, таймеры Kivy стоят. Сбрасываем окно напоминания
+        # и его таймеры, иначе просроченный таймер при возврате сразу свернёт
+        # приложение, а новое напоминание не покажется (окно «ещё открыто»).
+        for name in ("start_minimize_event", "reminder_close_event"):
+            event = getattr(self, name, None)
+            if event:
+                event.cancel()
+                setattr(self, name, None)
+        if getattr(self, "active_popup", None):
+            self.active_popup.dismiss()
+            self.active_popup = None
         return True
 
     def on_resume(self):
@@ -161,8 +172,13 @@ class ReminderApp(App):
 
     def check_pending(self):
         # Сервис оставляет флаг, когда наступило время напоминания.
-        if bridge.ANDROID and bridge.pop_pending() and not getattr(self, "active_popup", None):
-            self._show_reminder_ui()
+        if not bridge.ANDROID:
+            return
+        fired = bridge.pop_pending()
+        if fired and not getattr(self, "active_popup", None):
+            # Звук уже играет в сервисе; картинка живёт до конца 30-секундного окна.
+            left = bridge.REMINDER_SECONDS - (datetime.now() - fired).total_seconds()
+            self._show_reminder_ui(left)
     def pause(self, *_): self._stop_timer(); self.status.text = "Пауза"
     def stop_all(self, *_):
         self._stop_timer()
@@ -246,11 +262,18 @@ class ReminderApp(App):
         # Popup и виджеты Kivy должны создаваться только в главном потоке.
         Clock.schedule_once(lambda *_: self._show_reminder_ui())
 
-    def _show_reminder_ui(self):
+    def _stop_alert(self):
+        """Останавливает звук (на Android он играет в сервисе) и убирает уведомление."""
+        self.notifier.stop()
+        if bridge.ANDROID:
+            bridge.request_stop_sound()
+
+    def _show_reminder_ui(self, seconds=None):
         if getattr(self, "active_popup", None):
             self.active_popup.dismiss()
             self.active_popup = None
-        self.notifier.play(self.cfg.get("sound_path", "")); box = BoxLayout(orientation="vertical", spacing=self.vdp(8));
+        if not bridge.ANDROID: self.notifier.play(self.cfg.get("sound_path", ""))
+        box = BoxLayout(orientation="vertical", spacing=self.vdp(8));
         if self.cfg.get("image_path"):
             box.add_widget(Image(source=self.cfg["image_path"], allow_stretch=True, keep_ratio=True))
         buttons = BoxLayout(orientation="vertical", size_hint_y=None, height=self.vdp(44) * 3 + self.vdp(8) * 2, spacing=self.vdp(8)); ok=Button(text="Ок / Я сделал"); pause_sound=Button(text="Пауза звука"); snooze=Button(text="Отложить +5 минут"); buttons.add_widget(ok); buttons.add_widget(pause_sound); buttons.add_widget(snooze); box.add_widget(buttons)
@@ -259,11 +282,12 @@ class ReminderApp(App):
         # Подтверждение закрывает только текущее окно и сворачивает UI;
         # расписание напоминаний при этом не прерывается.
         ok.bind(on_release=lambda *_: self._close_reminder_ui(pop))
-        pause_sound.bind(on_release=lambda *_: self.notifier.pause())
-        snooze.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), setattr(self, "active_popup", None), self._restart_service(5) if bridge.ANDROID else self.scheduler.snooze(5)))
+        pause_sound.bind(on_release=lambda *_: (self.notifier.pause(), bridge.request_stop_sound() if bridge.ANDROID else None))
+        snooze.bind(on_release=lambda *_: (self._stop_alert(), pop.dismiss(), setattr(self, "active_popup", None), self._restart_service(5) if bridge.ANDROID else self.scheduler.snooze(5)))
         if not bridge.ANDROID: self.notifier.android_notification()
         pop.open()
-        self.reminder_close_event = Clock.schedule_once(lambda *_: self._close_reminder_ui(pop), 30)
+        delay = bridge.REMINDER_SECONDS if seconds is None else max(0, seconds)
+        self.reminder_close_event = Clock.schedule_once(lambda *_: self._close_reminder_ui(pop), delay)
 
     def _close_reminder_ui(self, pop):
         """Закрывает напоминание и сворачивает приложение.
@@ -273,7 +297,7 @@ class ReminderApp(App):
         """
         if getattr(self, "active_popup", None) is not pop:
             return
-        self.notifier.stop()
+        self._stop_alert()
         pop.dismiss()
         self.active_popup = None
         self.reminder_close_event = None

@@ -1,8 +1,9 @@
 """Точка входа foreground-сервиса: крутит планировщик, пока UI свёрнут или закрыт.
 
-Когда наступает время напоминания, сервис показывает уведомление (с полноэкранным
-намерением, открывающим приложение) и оставляет флаг для UI, который затем
-показывает картинку и проигрывает звук.
+Когда наступает время напоминания, сервис сам проигрывает звук и показывает
+уведомление (с полноэкранным намерением, открывающим приложение), а также
+оставляет флаг для UI, который по открытию приложения показывает картинку.
+Через REMINDER_SECONDS секунд сервис останавливает звук и убирает уведомление.
 """
 import json
 import os
@@ -15,6 +16,9 @@ from settings import load_settings
 
 CHANNEL_ID = "reminders"
 NOTIFICATION_ID = 2001
+
+player = None
+fired_at = None
 
 
 def notify():
@@ -51,9 +55,60 @@ def notify():
         print("reminder service: notify failed:", exc)
 
 
+def play_sound(path):
+    global player
+    stop_sound()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        from jnius import autoclass
+
+        player = autoclass("android.media.MediaPlayer")()
+        player.setDataSource(path)
+        player.setLooping(False)
+        player.prepare()
+        player.start()
+    except Exception as exc:  # без звука картинка и уведомление всё равно работают
+        print("reminder service: sound failed:", exc)
+        player = None
+
+
+def stop_sound():
+    global player
+    if player is None:
+        return
+    try:
+        player.stop()
+        player.release()
+    except Exception:
+        pass
+    player = None
+
+
+def cancel_notification():
+    try:
+        from jnius import autoclass
+
+        ctx = autoclass("org.kivy.android.PythonService").mService
+        ctx.getSystemService("notification").cancel(NOTIFICATION_ID)
+    except Exception as exc:
+        print("reminder service: cancel failed:", exc)
+
+
+def end_reminder():
+    global fired_at
+    fired_at = None
+    stop_sound()
+    cancel_notification()
+
+
 def on_reminder():
+    global fired_at
+    bridge.pop_stop_request()  # старая просьба об остановке не должна глушить новый сигнал
     bridge.mark_pending()
     notify()
+    play_sound(load_settings().get("sound_path", ""))
+    fired_at = time.time()
 
 
 def main():
@@ -75,6 +130,8 @@ def main():
 
     while True:
         bridge.write_state(scheduler.next_at)
+        if bridge.pop_stop_request() or (fired_at and time.time() - fired_at >= bridge.REMINDER_SECONDS):
+            end_reminder()
         time.sleep(1)
 
 

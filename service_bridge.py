@@ -14,6 +14,7 @@ from settings import settings_path
 
 ANDROID = "ANDROID_ARGUMENT" in os.environ
 SERVICE_NAME = "Reminder"  # совпадает с именем в buildozer.spec: services = reminder:...
+REMINDER_SECONDS = 30  # сколько длятся звук, уведомление и картинка после срабатывания
 
 
 def _dir() -> Path:
@@ -22,6 +23,10 @@ def _dir() -> Path:
 
 def _pending_file() -> Path:
     return _dir() / "pending_reminder"
+
+
+def _stop_sound_file() -> Path:
+    return _dir() / "stop_sound"
 
 
 def _state_file() -> Path:
@@ -34,6 +39,15 @@ def mark_pending():
     _pending_file().write_text(datetime.now().isoformat(), encoding="utf-8")
 
 
+def pop_stop_request() -> bool:
+    """True, если UI попросил остановить звук и убрать уведомление."""
+    try:
+        _stop_sound_file().unlink()
+        return True
+    except OSError:
+        return False
+
+
 def write_state(next_at):
     try:
         data = {"next_at": next_at.isoformat() if next_at else None}
@@ -44,13 +58,32 @@ def write_state(next_at):
 
 # --- сторона UI --------------------------------------------------------------
 
-def pop_pending() -> bool:
-    """True, если сервис оставил непоказанное напоминание (флаг сбрасывается)."""
+def pop_pending():
+    """Время срабатывания, если сервис оставил непоказанное напоминание, иначе None.
+
+    Флаг сбрасывается. Устаревшее (старше REMINDER_SECONDS) напоминание
+    считается пропущенным и не возвращается.
+    """
+    path = _pending_file()
     try:
-        _pending_file().unlink()
-        return True
+        fired = datetime.fromisoformat(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        fired = None
+    try:
+        path.unlink()
     except OSError:
-        return False
+        pass
+    if fired and (datetime.now() - fired).total_seconds() < REMINDER_SECONDS:
+        return fired
+    return None
+
+
+def request_stop_sound():
+    """UI просит сервис остановить звук и убрать уведомление (кнопки в окне)."""
+    try:
+        _stop_sound_file().write_text("1", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def read_next_at():
