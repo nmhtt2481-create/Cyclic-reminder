@@ -8,7 +8,9 @@ from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
+from kivy.core.window import Window
 from kivy.graphics import Color, Line
+from kivy.metrics import dp
 from settings import load_settings, save_settings
 from scheduler import ReminderScheduler
 from notifier import Notifier
@@ -29,21 +31,27 @@ class VisibleCheckBox(CheckBox):
 class ReminderApp(App):
     def build(self):
         self.cfg = load_settings(); self.notifier = Notifier(self.show_reminder)
-        self.root_box = BoxLayout(orientation="vertical", padding=12, spacing=8)
-        self.status = Label(text="Остановлено", size_hint_y=None, height=32)
+        # Эталон — десктопное окно ~800x630 (dp == px). На телефоне размеры задаются в dp,
+        # а по вертикали растягиваются пропорционально высоте экрана, чтобы блок
+        # занимал ту же долю экрана, что и в десктопной версии.
+        vs = max(1.0, Window.height / (630 * dp(1)))
+        vdp = lambda value: dp(value) * vs
+        field_w = dp(40 if bridge.ANDROID else 52)
+        self.root_box = BoxLayout(orientation="vertical", padding=vdp(12), spacing=vdp(8))
+        self.status = Label(text="Остановлено", size_hint_y=None, height=vdp(32))
         stored_minutes = int(self.cfg["interval_minutes"])
         self.interval_hours = TextInput(text=str(stored_minutes // 60), hint_text="Часы", input_filter="int", multiline=False, halign="center")
         self.interval_minutes = TextInput(text=str(stored_minutes % 60), hint_text="Минуты", input_filter="int", multiline=False, halign="center")
         from_hour, from_minute = self.cfg["active_from"].split(":", 1)
         to_hour, to_minute = self.cfg["active_to"].split(":", 1)
-        self.from_time = TextInput(text=from_hour.zfill(2), hint_text="ЧЧ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=52)
-        self.from_minute = TextInput(text=from_minute.zfill(2), hint_text="ММ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=52)
-        self.to_time = TextInput(text=to_hour.zfill(2), hint_text="ЧЧ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=52)
-        self.to_minute = TextInput(text=to_minute.zfill(2), hint_text="ММ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=52)
-        self.always = VisibleCheckBox(active=not self.cfg["active_hours_enabled"], size_hint=(None, None), size=(38, 38), color=(0.25, 0.55, 0.95, 1))
+        self.from_time = TextInput(text=from_hour.zfill(2), hint_text="ЧЧ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=field_w)
+        self.from_minute = TextInput(text=from_minute.zfill(2), hint_text="ММ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=field_w)
+        self.to_time = TextInput(text=to_hour.zfill(2), hint_text="ЧЧ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=field_w)
+        self.to_minute = TextInput(text=to_minute.zfill(2), hint_text="ММ", input_filter="int", multiline=False, halign="center", size_hint_x=None, width=field_w)
+        self.always = VisibleCheckBox(active=not self.cfg["active_hours_enabled"], size_hint=(None, None), size=(dp(38), dp(38)), color=(0.25, 0.55, 0.95, 1))
         for field in (self.interval_hours, self.interval_minutes):
             field.size_hint_x = None
-            field.width = 52
+            field.width = field_w
             field.bind(text=lambda widget, value: setattr(widget, "text", value[:2]) if len(value) > 2 else None)
         numeric_fields = (self.interval_hours, self.interval_minutes, self.from_time, self.from_minute, self.to_time, self.to_minute)
         for field in numeric_fields:
@@ -58,8 +66,8 @@ class ReminderApp(App):
             label.bind(texture_size=lambda widget, value: setattr(widget, "width", value[0]))
             return label
 
-        spacer_width = 24
-        interval_row = BoxLayout(orientation="horizontal", size_hint=(None, None), width=0, height=42)
+        spacer_width = dp(8 if bridge.ANDROID else 24)
+        interval_row = BoxLayout(orientation="horizontal", size_hint=(None, None), width=0, height=vdp(42))
         interval_row.add_widget(fixed_label("Количество часов"))
         interval_row.add_widget(Label(text="   ", size_hint_x=None, width=spacer_width))
         interval_row.add_widget(self.interval_hours)
@@ -74,7 +82,7 @@ class ReminderApp(App):
 
         active_title = Label(text="Активное окно времени работы напоминаний", halign="center", valign="middle")
         active_title.bind(size=lambda widget, value: setattr(widget, "text_size", value))
-        active_row = BoxLayout(orientation="horizontal", size_hint=(None, None), width=0, height=42)
+        active_row = BoxLayout(orientation="horizontal", size_hint=(None, None), width=0, height=vdp(42))
         active_row.add_widget(fixed_label("с"))
         active_row.add_widget(Label(text="   ", size_hint_x=None, width=spacer_width))
         active_row.add_widget(self.from_time)
@@ -90,9 +98,9 @@ class ReminderApp(App):
         active_row.pos_hint = {"center_x": 0.5}
         self.root_box.add_widget(active_title)
         self.root_box.add_widget(active_row)
-        row = BoxLayout(size_hint_y=None, height=42); row.add_widget(self.always); row.add_widget(Label(text="Работать круглосуточно")); self.root_box.add_widget(row)
+        row = BoxLayout(size_hint_y=None, height=vdp(42)); row.add_widget(self.always); row.add_widget(Label(text="Работать круглосуточно")); self.root_box.add_widget(row)
         for text, action in (("Старт", self.start), ("Пауза таймера", self.pause), ("Стоп", self.stop_all), ("Выбрать картинку", self.pick_image), ("Выбрать звук", self.pick_sound)):
-            self.root_box.add_widget(Button(text=text, on_release=action, size_hint_y=None, height=44))
+            self.root_box.add_widget(Button(text=text, on_release=action, size_hint_y=None, height=vdp(44)))
         self.root_box.add_widget(self.status); self.scheduler = ReminderScheduler(lambda: self.cfg, self.show_reminder); Clock.schedule_interval(self.refresh, 1)
         return self.root_box
 
