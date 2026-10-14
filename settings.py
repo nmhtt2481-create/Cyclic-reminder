@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 DEFAULTS = {
@@ -11,6 +12,11 @@ DEFAULTS = {
 }
 
 def settings_path() -> Path:
+    # На Android это та же папка, что и App.user_data_dir, но доступна и в
+    # процессе foreground-сервиса, где приложение Kivy не запущено.
+    private = os.environ.get("ANDROID_PRIVATE")
+    if private:
+        return Path(private) / "app_settings.json"
     try:
         from kivy.app import App
         return Path(App.get_running_app().user_data_dir) / "app_settings.json"

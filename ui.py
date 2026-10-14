@@ -12,6 +12,7 @@ from kivy.graphics import Color, Line
 from settings import load_settings, save_settings
 from scheduler import ReminderScheduler
 from notifier import Notifier
+import service_bridge as bridge
 
 class VisibleCheckBox(CheckBox):
     def __init__(self, **kwargs):
@@ -106,10 +107,53 @@ class ReminderApp(App):
         if end_hour == 24:
             end_minute = 0
         self.cfg.update(interval_minutes=max(1, min(1440, minutes)), active_hours_enabled=not self.always.active, active_from=f"{start_hour:02d}:{start_minute:02d}", active_to=f"{end_hour:02d}:{end_minute:02d}"); save_settings(self.cfg)
-    def start(self, *_): self.persist(); self.scheduler.start(); self.status.text = "Запущено"
-    def pause(self, *_): self.scheduler.pause(); self.status.text = "Пауза"
+    def start(self, *_):
+        self.persist()
+        if bridge.ANDROID:
+            self._request_notification_permission()
+            self._restart_service()
+        else:
+            self.scheduler.start()
+        self.status.text = "Запущено"
+
+    def _request_notification_permission(self):
+        try:
+            from android.permissions import request_permissions
+            request_permissions(["android.permission.POST_NOTIFICATIONS"])
+        except Exception:
+            pass
+
+    def _restart_service(self, snooze_minutes=None):
+        # Запущенный сервис повторно не стартует, поэтому сначала останавливаем его,
+        # чтобы он перечитал настройки; старт чуть позже, чтобы остановка успела пройти.
+        try:
+            bridge.stop_service()
+            Clock.schedule_once(lambda *_: bridge.start_service(snooze_minutes), 0.7)
+        except Exception as exc:
+            self.status.text = "Не удалось запустить сервис: " + str(exc)
+
+    def _stop_timer(self):
+        if bridge.ANDROID:
+            try:
+                bridge.stop_service()
+            except Exception:
+                pass
+        else:
+            self.scheduler.pause()
+
+    def on_pause(self):
+        return True
+
+    def on_resume(self):
+        self.check_pending()
+
+    def check_pending(self):
+        # Сервис оставляет флаг, когда наступило время напоминания.
+        if bridge.ANDROID and bridge.pop_pending() and not getattr(self, "active_popup", None):
+            self._show_reminder_ui()
+    def pause(self, *_): self._stop_timer(); self.status.text = "Пауза"
     def stop_all(self, *_):
-        self.scheduler.pause()
+        self._stop_timer()
         self.notifier.stop()
         if getattr(self, "active_popup", None):
             self.active_popup.dismiss()
@@ -132,7 +176,9 @@ class ReminderApp(App):
             except Exception:
                 pass
     def refresh(self, *_):
-        if self.scheduler.next_at: self.status.text = "До следующего: " + str(max(0, int((self.scheduler.next_at - datetime.now()).total_seconds()))) + " сек."
+        self.check_pending()
+        next_at = bridge.read_next_at() if bridge.ANDROID else self.scheduler.next_at
+        if next_at: self.status.text = "До следующего: " + str(max(0, int((next_at - datetime.now()).total_seconds()))) + " сек."
     def pick_image(self, *_): self._pick("image_path", "Выбор изображения", ("*.png", "*.jpg", "*.jpeg"))
     def pick_sound(self, *_): self._pick("sound_path", "Выбор звука", ("*.mp3", "*.wav", "*.ogg"))
     def _pick(self, key, title, filters):
@@ -151,5 +197,6 @@ class ReminderApp(App):
         self.active_popup = pop
         ok.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), setattr(self, "active_popup", None)))
         pause_sound.bind(on_release=lambda *_: self.notifier.pause())
-        snooze.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), self.scheduler.snooze(5)))
-        self.notifier.android_notification(); pop.open()
+        snooze.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), setattr(self, "active_popup", None), self._restart_service(5) if bridge.ANDROID else self.scheduler.snooze(5)))
+        if not bridge.ANDROID: self.notifier.android_notification()
+        pop.open()

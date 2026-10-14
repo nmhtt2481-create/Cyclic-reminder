@@ -8,9 +8,10 @@ version = 1.0
 requirements = python3,kivy,kivymd,plyer,pyjnius
 orientation = portrait
 fullscreen = 1
-android.permissions = POST_NOTIFICATIONS,READ_MEDIA_IMAGES,READ_MEDIA_AUDIO,FOREGROUND_SERVICE,SCHEDULE_EXACT_ALARM,WAKE_LOCK,RECEIVE_BOOT_COMPLETED
+android.permissions = POST_NOTIFICATIONS,FOREGROUND_SERVICE_SPECIAL_USE,USE_FULL_SCREEN_INTENT,READ_MEDIA_IMAGES,READ_MEDIA_AUDIO,FOREGROUND_SERVICE,SCHEDULE_EXACT_ALARM,WAKE_LOCK,RECEIVE_BOOT_COMPLETED
 android.api = 35
 android.minapi = 24
+services = reminder:service.py:foreground:sticky:foregroundServiceType=specialUse
 android.archs = arm64-v8a, armeabi-v7a
 # android.add_src = android_src
 android.accept_sdk_license = True
