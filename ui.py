@@ -124,6 +124,9 @@ class ReminderApp(App):
         else:
             self.scheduler.start()
         self.status.text = "Запущено"
+        if getattr(self, "start_minimize_event", None):
+            self.start_minimize_event.cancel()
+        self.start_minimize_event = Clock.schedule_once(lambda *_: self.minimize_app(), 5)
 
     def _request_notification_permission(self):
         try:
@@ -164,11 +167,19 @@ class ReminderApp(App):
     def stop_all(self, *_):
         self._stop_timer()
         self.notifier.stop()
+        if getattr(self, "start_minimize_event", None):
+            self.start_minimize_event.cancel()
+            self.start_minimize_event = None
         if getattr(self, "active_popup", None):
+            if getattr(self, "reminder_close_event", None):
+                self.reminder_close_event.cancel()
+                self.reminder_close_event = None
             self.active_popup.dismiss()
             self.active_popup = None
         self.status.text = "Остановлено"
-        self.minimize_app()
+        # «Стоп» завершает приложение полностью. Следующее напоминание
+        # появится только после нового запуска приложения ярлыком.
+        Clock.schedule_once(lambda *_: self.stop(), 0)
 
     def minimize_app(self):
         """Сворачивает приложение, не завершая его процесс."""
@@ -236,14 +247,34 @@ class ReminderApp(App):
         Clock.schedule_once(lambda *_: self._show_reminder_ui())
 
     def _show_reminder_ui(self):
+        if getattr(self, "active_popup", None):
+            self.active_popup.dismiss()
+            self.active_popup = None
         self.notifier.play(self.cfg.get("sound_path", "")); box = BoxLayout(orientation="vertical", spacing=self.vdp(8));
         if self.cfg.get("image_path"):
             box.add_widget(Image(source=self.cfg["image_path"], allow_stretch=True, keep_ratio=True))
         buttons = BoxLayout(orientation="vertical", size_hint_y=None, height=self.vdp(44) * 3 + self.vdp(8) * 2, spacing=self.vdp(8)); ok=Button(text="Ок / Я сделал"); pause_sound=Button(text="Пауза звука"); snooze=Button(text="Отложить +5 минут"); buttons.add_widget(ok); buttons.add_widget(pause_sound); buttons.add_widget(snooze); box.add_widget(buttons)
         pop = Popup(title="Напоминание", content=box, size_hint=(1,1), auto_dismiss=False)
         self.active_popup = pop
-        ok.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), setattr(self, "active_popup", None)))
+        # Подтверждение закрывает только текущее окно и сворачивает UI;
+        # расписание напоминаний при этом не прерывается.
+        ok.bind(on_release=lambda *_: self._close_reminder_ui(pop))
         pause_sound.bind(on_release=lambda *_: self.notifier.pause())
         snooze.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), setattr(self, "active_popup", None), self._restart_service(5) if bridge.ANDROID else self.scheduler.snooze(5)))
         if not bridge.ANDROID: self.notifier.android_notification()
         pop.open()
+        self.reminder_close_event = Clock.schedule_once(lambda *_: self._close_reminder_ui(pop), 30)
+
+    def _close_reminder_ui(self, pop):
+        """Закрывает напоминание и сворачивает приложение.
+
+        Метод вызывается сразу по кнопке «Ок / Я сделал» или автоматически
+        через 30 секунд, если кнопка не была нажата.
+        """
+        if getattr(self, "active_popup", None) is not pop:
+            return
+        self.notifier.stop()
+        pop.dismiss()
+        self.active_popup = None
+        self.reminder_close_event = None
+        self.minimize_app()
