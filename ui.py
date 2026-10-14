@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from kivy.app import App
 from kivy.clock import Clock
@@ -35,7 +36,7 @@ class ReminderApp(App):
         # а по вертикали растягиваются пропорционально высоте экрана, чтобы блок
         # занимал ту же долю экрана, что и в десктопной версии.
         vs = max(1.0, Window.height / (630 * dp(1)))
-        vdp = lambda value: dp(value) * vs
+        vdp = self.vdp = lambda value: dp(value) * vs
         field_w = dp(40 if bridge.ANDROID else 52)
         self.root_box = BoxLayout(orientation="vertical", padding=vdp(12), spacing=vdp(8))
         self.status = Label(text="Остановлено", size_hint_y=None, height=vdp(32))
@@ -187,20 +188,58 @@ class ReminderApp(App):
         self.check_pending()
         next_at = bridge.read_next_at() if bridge.ANDROID else self.scheduler.next_at
         if next_at: self.status.text = "До следующего: " + str(max(0, int((next_at - datetime.now()).total_seconds()))) + " сек."
-    def pick_image(self, *_): self._pick("image_path", "Выбор изображения", ("*.png", "*.jpg", "*.jpeg"))
-    def pick_sound(self, *_): self._pick("sound_path", "Выбор звука", ("*.mp3", "*.wav", "*.ogg"))
-    def _pick(self, key, title, filters):
+    def pick_image(self, *_):
+        self._pick("image_path", "Выбор изображения", ("*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG"), "Pictures/Gallery", ("READ_MEDIA_IMAGES",))
+    def pick_sound(self, *_):
+        self._pick("sound_path", "Выбор звука", ("*.mp3", "*.wav", "*.ogg", "*.MP3", "*.WAV", "*.OGG"), "Music", ("READ_MEDIA_AUDIO",))
+
+    def _pick(self, key, title, filters, subdir, media_permissions):
+        if not bridge.ANDROID:
+            return self._open_picker(key, title, filters, None)
+        open_picker = lambda *_: Clock.schedule_once(lambda *_: self._open_picker(key, title, filters, subdir))
+        try:
+            from android.permissions import check_permission, request_permissions
+            # READ_MEDIA_* действуют с Android 13, READ_EXTERNAL_STORAGE — на более старых.
+            wanted = ["android.permission." + name for name in (*media_permissions, "READ_EXTERNAL_STORAGE")]
+            missing = [name for name in wanted if not check_permission(name)]
+            if missing:
+                # Окно открывается после ответа пользователя на запрос доступа к файлам.
+                request_permissions(missing, open_picker)
+                return
+        except Exception:
+            pass
+        open_picker()
+
+    def _storage_dir(self, subdir):
+        """Папка внутреннего накопителя (например, Pictures/Gallery); если её нет — корень накопителя."""
+        try:
+            from android.storage import primary_external_storage_path
+            root = primary_external_storage_path()
+        except Exception:
+            root = "/storage/emulated/0"
+        path = os.path.join(root, subdir)
+        return path if os.path.isdir(path) else root
+
+    def _open_picker(self, key, title, filters, subdir):
         from kivy.uix.filechooser import FileChooserListView
-        chooser = FileChooserListView(filters=list(filters)); box = BoxLayout(orientation="vertical"); box.add_widget(chooser); b = Button(text="Выбрать", size_hint_y=None, height=45); box.add_widget(b); pop = Popup(title=title, content=box, size_hint=(.95,.9)); b.bind(on_release=lambda *_: (self.cfg.update({key: chooser.selection[0]} if chooser.selection else {}), save_settings(self.cfg), pop.dismiss())); pop.open()
+        options = {"path": self._storage_dir(subdir)} if subdir else {}
+        chooser = FileChooserListView(filters=list(filters), **options)
+        box = BoxLayout(orientation="vertical", spacing=self.vdp(8))
+        box.add_widget(chooser)
+        b = Button(text="Выбрать", size_hint_y=None, height=self.vdp(44))
+        box.add_widget(b)
+        pop = Popup(title=title, content=box, size_hint=(.95, .9))
+        b.bind(on_release=lambda *_: (self.cfg.update({key: chooser.selection[0]} if chooser.selection else {}), save_settings(self.cfg), pop.dismiss()))
+        pop.open()
     def show_reminder(self):
         # Popup и виджеты Kivy должны создаваться только в главном потоке.
         Clock.schedule_once(lambda *_: self._show_reminder_ui())
 
     def _show_reminder_ui(self):
-        self.notifier.play(self.cfg.get("sound_path", "")); box = BoxLayout(orientation="vertical");
+        self.notifier.play(self.cfg.get("sound_path", "")); box = BoxLayout(orientation="vertical", spacing=self.vdp(8));
         if self.cfg.get("image_path"):
             box.add_widget(Image(source=self.cfg["image_path"], allow_stretch=True, keep_ratio=True))
-        buttons = BoxLayout(size_hint_y=None, height=55); ok=Button(text="Ок / Я сделал"); pause_sound=Button(text="Пауза звука"); snooze=Button(text="Отложить +5 минут"); buttons.add_widget(ok); buttons.add_widget(pause_sound); buttons.add_widget(snooze); box.add_widget(buttons)
+        buttons = BoxLayout(orientation="vertical", size_hint_y=None, height=self.vdp(44) * 3 + self.vdp(8) * 2, spacing=self.vdp(8)); ok=Button(text="Ок / Я сделал"); pause_sound=Button(text="Пауза звука"); snooze=Button(text="Отложить +5 минут"); buttons.add_widget(ok); buttons.add_widget(pause_sound); buttons.add_widget(snooze); box.add_widget(buttons)
         pop = Popup(title="Напоминание", content=box, size_hint=(1,1), auto_dismiss=False)
         self.active_popup = pop
         ok.bind(on_release=lambda *_: (self.notifier.stop(), pop.dismiss(), setattr(self, "active_popup", None)))
