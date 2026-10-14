@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.buildozer/
+bin/
+.venv/
+venv/
+app_settings.json
