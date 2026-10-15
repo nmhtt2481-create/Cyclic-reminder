@@ -120,6 +120,7 @@ class ReminderApp(App):
         self.persist()
         if bridge.ANDROID:
             self._request_notification_permission()
+            self._request_ignore_battery_optimizations()
             self._restart_service()
         else:
             self.scheduler.start()
@@ -127,6 +128,22 @@ class ReminderApp(App):
         if getattr(self, "start_minimize_event", None):
             self.start_minimize_event.cancel()
         self.start_minimize_event = Clock.schedule_once(lambda *_: self.minimize_app(), 5)
+
+    def _request_ignore_battery_optimizations(self):
+        """Без исключения из оптимизации батареи Doze усыпляет сервис при выключенном экране."""
+        try:
+            from jnius import autoclass
+            activity = autoclass("org.kivy.android.PythonActivity").mActivity
+            package = activity.getPackageName()
+            if activity.getSystemService("power").isIgnoringBatteryOptimizations(package):
+                return
+            Intent = autoclass("android.content.Intent")
+            Uri = autoclass("android.net.Uri")
+            intent = Intent("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")
+            intent.setData(Uri.parse("package:" + package))
+            activity.startActivity(intent)
+        except Exception:
+            pass
 
     def _request_notification_permission(self):
         try:

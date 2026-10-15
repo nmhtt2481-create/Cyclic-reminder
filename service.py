@@ -19,6 +19,7 @@ NOTIFICATION_ID = 2001
 
 player = None
 fired_at = None
+wake_lock = None
 
 
 def notify():
@@ -50,6 +51,7 @@ def notify():
         builder.setFullScreenIntent(pending, True)
         builder.setAutoCancel(True)
         builder.setCategory("alarm")
+        builder.setVisibility(1)  # VISIBILITY_PUBLIC: текст виден и на экране блокировки
         manager.notify(NOTIFICATION_ID, builder.build())
     except Exception as exc:  # уведомление не должно ронять сервис
         print("reminder service: notify failed:", exc)
@@ -95,6 +97,21 @@ def cancel_notification():
         print("reminder service: cancel failed:", exc)
 
 
+def acquire_wake_lock():
+    """Не даёт процессору уснуть при выключенном экране, иначе таймер сервиса замирает."""
+    global wake_lock
+    try:
+        from jnius import autoclass
+
+        ctx = autoclass("org.kivy.android.PythonService").mService
+        manager = ctx.getSystemService("power")
+        wake_lock = manager.newWakeLock(1, "cyclicreminder:service")  # PARTIAL_WAKE_LOCK
+        wake_lock.setReferenceCounted(False)
+        wake_lock.acquire()
+    except Exception as exc:  # без блокировки сервис всё равно работает при включённом экране
+        print("reminder service: wake lock failed:", exc)
+
+
 def end_reminder():
     global fired_at
     fired_at = None
@@ -104,6 +121,7 @@ def end_reminder():
 
 def on_reminder():
     global fired_at
+    bridge.log("fired")
     bridge.pop_stop_request()  # старая просьба об остановке не должна глушить новый сигнал
     bridge.mark_pending()
     notify()
@@ -112,6 +130,8 @@ def on_reminder():
 
 
 def main():
+    acquire_wake_lock()
+    bridge.log("service start pid=%d wake_lock=%s" % (os.getpid(), wake_lock is not None))
     try:
         argument = json.loads(os.environ.get("PYTHON_SERVICE_ARGUMENT") or "{}")
     except ValueError:
@@ -128,7 +148,12 @@ def main():
         on_reminder()
     scheduler.start()
 
+    last_tick = time.time()
     while True:
+        now = time.time()
+        if now - last_tick > 3:
+            bridge.log("woke after %.0fs pause" % (now - last_tick))
+        last_tick = now
         bridge.write_state(scheduler.next_at)
         if bridge.pop_stop_request() or (fired_at and time.time() - fired_at >= bridge.REMINDER_SECONDS):
             end_reminder()

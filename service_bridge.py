@@ -29,6 +29,18 @@ def _stop_sound_file() -> Path:
     return _dir() / "stop_sound"
 
 
+def log(message):
+    """Короткий журнал сервиса (service.log) для разбора пропущенных напоминаний."""
+    try:
+        path = _dir() / "service.log"
+        if path.exists() and path.stat().st_size > 50000:
+            path.write_text("", encoding="utf-8")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now().isoformat(timespec='seconds')} {message}" + chr(10))
+    except OSError:
+        pass
+
+
 def _state_file() -> Path:
     return _dir() / "service_state.json"
 
