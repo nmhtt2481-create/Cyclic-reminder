@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
@@ -168,7 +168,9 @@ class ReminderApp(App):
         return True
 
     def on_resume(self):
-        self.check_pending()
+        # После возврата из фона графика ещё не готова: окно с картинкой, созданное
+        # сразу, показывало чёрный квадрат. Создаём его чуть позже, на свежем кадре.
+        Clock.schedule_once(lambda *_: Clock.schedule_once(lambda *_: self.check_pending(), 0.5), 0)
 
     def check_pending(self):
         # Сервис оставляет флаг, когда наступило время напоминания.
@@ -287,7 +289,15 @@ class ReminderApp(App):
         if not bridge.ANDROID: self.notifier.android_notification()
         pop.open()
         delay = bridge.REMINDER_SECONDS if seconds is None else max(0, seconds)
-        self.reminder_close_event = Clock.schedule_once(lambda *_: self._close_reminder_ui(pop), delay)
+        deadline = datetime.now() + timedelta(seconds=delay)
+        # После возврата из фона часы Kivy отстают (цикл кадров стоял), и таймер,
+        # поставленный сразу, считался бы просроченным и тут же свернул приложение.
+        # Поэтому ставим его на следующем кадре, а срок считаем по реальному времени.
+        self.reminder_close_event = Clock.schedule_once(lambda *_: self._arm_close(pop, deadline), 0)
+
+    def _arm_close(self, pop, deadline):
+        remaining = (deadline - datetime.now()).total_seconds()
+        self.reminder_close_event = Clock.schedule_once(lambda *_: self._close_reminder_ui(pop), max(0.1, remaining))
 
     def _close_reminder_ui(self, pop):
         """Закрывает напоминание и сворачивает приложение.
